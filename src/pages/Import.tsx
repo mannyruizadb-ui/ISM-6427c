@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useData } from '../state/data'
 import { supabase, must } from '../lib/supabase'
 import { autoMap, downloadText, FIELDS, parseCsv, parseDateLoose, templateCsv, type ImportKind } from '../lib/csv'
@@ -13,13 +14,14 @@ interface Prepared {
   errors: { line: number; reason: string }[]
 }
 
-const KIND_LABEL: Record<ImportKind, string> = { assets: 'Trucks & equipment', parts: 'Parts', repairs: 'Past repairs' }
+const KIND_LABEL: Record<ImportKind, string> = { assets: 'Trucks & equipment', parts: 'Parts', repairs: 'Past repairs', fuel: 'Fuel log' }
 const BATCH = 200
 
 export function Import() {
   const d = useData()
   const toast = useToast()
-  const [kind, setKind] = useState<ImportKind>('assets')
+  const [params] = useSearchParams()
+  const [kind, setKind] = useState<ImportKind>(params.get('kind') === 'fuel' ? 'fuel' : 'assets')
   const [file, setFile] = useState<{ name: string; headers: string[]; rows: Record<string, string>[] } | null>(null)
   const [map, setMap] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -60,6 +62,7 @@ export function Import() {
     const assetByLabel = new Map(d.assets.map((a) => [a.label.toLowerCase(), a]))
     const existingParts = new Set(d.parts.map((p) => p.part_number.toLowerCase()))
     const seen = new Set<string>()
+    const existingFuel = new Set(d.fuel_logs.map((f) => `${f.asset_id ?? (f.vehicle_label ?? '').toLowerCase()}|${f.filled_on}|${f.gallons}|${f.total_cost}`))
 
     file.rows.forEach((row, i) => {
       const line = i + 2 // header is line 1
@@ -122,6 +125,35 @@ export function Import() {
             fits: fits.map((f) => assetByLabel.get(f)?.id).filter(Boolean),
             unknownFits: fits.filter((f) => !assetByLabel.has(f)),
           })
+        } else if (kind === 'fuel') {
+          const vehicle = get(row, 'vehicle')
+          if (!vehicle) throw new Error('no truck / vehicle')
+          const truck = assetByLabel.get(vehicle.toLowerCase())
+          const asset = truck?.kind === 'truck' ? truck : undefined
+          const date = parseDateLoose(get(row, 'date'))
+          if (!date) throw new Error(`can't read date “${get(row, 'date')}”`)
+          const gallons = toNum(get(row, 'gallons'))
+          if (gallons == null || gallons <= 0) throw new Error('missing gallons')
+          const total = toNum(get(row, 'total_cost'))
+          if (total == null || total < 0) throw new Error('missing total price')
+          const odoRaw = get(row, 'odometer')
+          const odo = toNum(odoRaw)
+          if (odoRaw && (odo == null || odo < 0)) throw new Error(`odometer “${odoRaw}” is not a number`)
+          const key = `${asset?.id ?? vehicle.toLowerCase()}|${date}|${gallons}|${total}`
+          if (existingFuel.has(key) || seen.has(key)) return out.skipped.push({ line, reason: `${vehicle} on ${date} already logged` })
+          seen.add(key)
+          out.ok.push({
+            asset_id: asset?.id ?? null,
+            vehicle_label: asset ? null : vehicle,
+            filled_on: date,
+            odometer: asset && odo != null ? Math.round(odo) : null,
+            gallons,
+            total_cost: total,
+            full_tank: !/^(n|no|false|0|partial)$/i.test(get(row, 'full_tank')),
+            location: get(row, 'location') || null,
+            notes: get(row, 'notes') || null,
+            source: 'import',
+          })
         } else {
           const label = get(row, 'asset')
           const asset = assetByLabel.get(label.toLowerCase())
@@ -164,7 +196,7 @@ export function Import() {
       }
     })
     return out
-  }, [file, map, kind, d.assets, d.parts])
+  }, [file, map, kind, d.assets, d.parts, d.fuel_logs])
 
   const run = async () => {
     if (!prepared || !prepared.ok.length) return
@@ -204,6 +236,13 @@ export function Import() {
           done += rows.length
           setProgress(`${done} of ${prepared.ok.length}`)
         }
+      } else if (kind === 'fuel') {
+        for (let i = 0; i < prepared.ok.length; i += BATCH) {
+          const rows = must(await supabase.from('fuel_logs').insert(prepared.ok.slice(i, i + BATCH)).select()) as any[]
+          rows.forEach((r) => d.upsertLocal('fuel_logs', r))
+          done += rows.length
+          setProgress(`${done} of ${prepared.ok.length}`)
+        }
       } else {
         const profByName = new Map(d.profiles.map((p) => [p.full_name.toLowerCase(), p.id]))
         const vendByName = new Map(d.vendors.map((v) => [v.name.toLowerCase(), v.id]))
@@ -231,7 +270,7 @@ export function Import() {
         }
         await d.reload()
       }
-      setResult(`Imported ${done} ${kind === 'repairs' ? 'repair records' : kind}.`)
+      setResult(`Imported ${done} ${kind === 'repairs' ? 'repair records' : kind === 'fuel' ? 'fill-ups' : kind}.`)
       toast(`Imported ${done} rows`)
       setFile(null)
     } catch (e) {
@@ -243,6 +282,7 @@ export function Import() {
     }
   }
 
+  const otherVehicles = prepared && kind === 'fuel' ? [...new Set(prepared.ok.filter((r) => !r.asset_id).map((r) => r.vehicle_label as string))] : []
   const unknownFits = prepared && kind === 'parts' ? [...new Set(prepared.ok.flatMap((p) => p.unknownFits as string[]))] : []
 
   return (
@@ -255,11 +295,12 @@ export function Import() {
             label="Import type"
             value={kind}
             onChange={(k) => reset(k)}
-            options={(['assets', 'parts', 'repairs'] as const).map((k) => ({ value: k, label: KIND_LABEL[k] }))}
+            options={(['assets', 'parts', 'repairs', 'fuel'] as const).map((k) => ({ value: k, label: KIND_LABEL[k] }))}
           />
           <p className="small muted">
             {kind === 'assets' && 'One row per truck or machine. Import these first — repairs and parts are matched to them by unit number or name.'}
             {kind === 'parts' && 'One row per part. Vendors that don’t exist yet are created. Existing part numbers are skipped.'}
+            {kind === 'fuel' && 'One row per fill-up. Import trucks first so fill-ups match by truck number; anything else (Yaris, U-Haul, rentals) is logged as “other” without MPG. Rows already imported are skipped, so re-running the same file is safe.'}
             {kind === 'repairs' && 'One row per past repair. The asset column must match a unit number or equipment name. Parts cost is recorded as a dollar amount and does not touch inventory. Re-importing the same file creates duplicates.'}
           </p>
           <div>
@@ -326,6 +367,9 @@ export function Import() {
                 <summary style={{ cursor: 'pointer' }}>Show skipped rows</summary>
                 <ul className="small">{prepared.skipped.slice(0, 100).map((s, i) => <li key={i}>Line {s.line}: {s.reason}</li>)}</ul>
               </details>
+            )}
+            {otherVehicles.length > 0 && (
+              <div className="banner warn">Not trucks in the app — these will be logged as rentals / other, with no MPG: {otherVehicles.join(', ')}. If any is a fleet vehicle, add it under Assets first, then re-import.</div>
             )}
             {unknownFits.length > 0 && (
               <div className="banner warn">These “fits” names don't match any asset and will be ignored: {unknownFits.slice(0, 15).join(', ')}{unknownFits.length > 15 && '…'}</div>

@@ -154,3 +154,21 @@ export interface WorkOrderTotal {
   vendor_cost: number
   total_cost: number
 }
+
+export interface FuelLog {
+  id: string
+  asset_id: string | null
+  vehicle_label: string | null
+  filled_on: string
+  odometer: number | null
+  gallons: number
+  total_cost: number
+  full_tank: boolean
+  location: string | null
+  notes: string | null
+  receipt_path: string | null
+  entered_by: string | null
+  source: 'app' | 'import'
+  created_at: string
+  updated_at: string
+}

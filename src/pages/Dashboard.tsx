@@ -3,10 +3,12 @@ import { useMemo } from 'react'
 import { useAuth, useRole } from '../state/auth'
 import { useData, useLookups } from '../state/data'
 import { allPmStatuses, PM_LABEL } from '../lib/pm'
-import { fmtDate, fmtMiles, fmtNum, firstName, greeting } from '../lib/format'
+import { fmtDate, fmtMiles, fmtMoney0, fmtNum, firstName, greeting } from '../lib/format'
 import { EmptyState, Fab, StatusPill, useToast } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { supabase } from '../lib/supabase'
+import { analyseFuel, SERIOUS, summarise } from '../lib/fuel'
+import { FuelRowItem, periodStart } from './Fuel'
 
 function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`
@@ -44,6 +46,11 @@ function StaffHome() {
   const attention = pm.filter((s) => s.state !== 'ok').slice(0, 6)
   const low = d.parts.filter((p) => !p.retired_at && p.qty_on_hand <= p.reorder_point)
   const down = d.assets.filter((a) => !a.retired_at && a.status === 'down')
+  const fuel = useMemo(() => {
+    const rows = [...analyseFuel(d.fuel_logs).values()]
+    const month = rows.filter((r) => r.log.filled_on >= periodStart('month')!)
+    return { month: summarise(month), toCheck: rows.filter((r) => r.flags.some((f) => SERIOUS.includes(f))).length }
+  }, [d.fuel_logs])
 
   const summary =
     `You have ${plural(open.length, 'open work order')}, ` +
@@ -75,6 +82,17 @@ function StaffHome() {
           <div className="label">Low-stock parts</div>
           <div className="value">{low.length}</div>
         </Link>
+        <Link to="/fuel" className="stat">
+          <div className="label">Fuel this month</div>
+          <div className="value" style={{ fontSize: '1.4rem' }}>{fmtMoney0(fuel.month.cost)}</div>
+          <div className="small muted">{fuel.month.mpg ? `${fuel.month.mpg.toFixed(1)} MPG` : `${fuel.month.fills} fill-ups`}</div>
+        </Link>
+        {fuel.toCheck > 0 && (
+          <Link to="/fuel?period=all&flagged=1" className="stat warn">
+            <div className="label">Fuel entries to check</div>
+            <div className="value">{fuel.toCheck}</div>
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-2">
@@ -290,6 +308,10 @@ function DriverHome() {
   const { assetById } = useLookups()
   const mine = d.work_orders.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
   const open = mine.filter((w) => w.status !== 'done')
+  const fills = useMemo(
+    () => [...analyseFuel(d.fuel_logs).values()].sort((a, b) => b.log.created_at.localeCompare(a.log.created_at)).slice(0, 3),
+    [d.fuel_logs],
+  )
   return (
     <>
       <Greeting
@@ -299,9 +321,23 @@ function DriverHome() {
             : 'Nothing open right now. Report anything wrong with your truck below.'
         }
       />
-      <Link to="/report" className="btn primary big block" style={{ marginBottom: 20 }}>
-        <Icon name="camera" /> Report a problem
-      </Link>
+      <div className="grid grid-2" style={{ marginBottom: 20 }}>
+        <Link to="/report" className="btn primary big block">
+          <Icon name="camera" /> Report a problem
+        </Link>
+        <Link to="/fuel/new" className="btn primary big block">
+          <Icon name="fuel" /> Log fuel
+        </Link>
+      </div>
+      {fills.length > 0 && (
+        <section style={{ marginBottom: 20 }}>
+          <div className="card-head" style={{ marginBottom: 10 }}>
+            <h2>My recent fill-ups</h2>
+            <Link to="/fuel" className="btn ghost">All</Link>
+          </div>
+          <div className="list">{fills.map((r) => <FuelRowItem key={r.log.id} r={r} />)}</div>
+        </section>
+      )}
       <h2 style={{ marginBottom: 10 }}>My reports</h2>
       {mine.length === 0 ? (
         <EmptyState icon="clipboard" title="No reports yet">

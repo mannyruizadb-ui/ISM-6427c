@@ -8,7 +8,7 @@ export interface CsvField {
   hint?: string
 }
 
-export type ImportKind = 'assets' | 'parts' | 'repairs'
+export type ImportKind = 'assets' | 'parts' | 'repairs' | 'fuel'
 
 export const FIELDS: Record<ImportKind, CsvField[]> = {
   assets: [
@@ -49,6 +49,16 @@ export const FIELDS: Record<ImportKind, CsvField[]> = {
     { key: 'status', label: 'Status', aliases: ['status'], hint: 'Blank = done' },
     { key: 'reported_by', label: 'Reported by', aliases: ['reported by', 'reporter', 'driver'] },
     { key: 'mechanic', label: 'Mechanic / vendor', aliases: ['mechanic', 'tech', 'technician', 'assigned', 'assigned to', 'done by', 'vendor'] },
+  ],
+  fuel: [
+    { key: 'vehicle', label: 'Truck / vehicle', required: true, aliases: ['truck', 'truck #', 'truck number', 'unit', 'unit #', 'vehicle'], hint: 'Names that aren’t trucks in the app are logged as rentals / other' },
+    { key: 'date', label: 'Date', required: true, aliases: ['date', 'date of fueling', 'fill date', 'fueling date'] },
+    { key: 'odometer', label: 'Odometer at fill-up', aliases: ['odometer', 'odo', 'mileage', 'miles', 'starting odometer reading', 'starting odometer', 'odometer reading'], hint: 'The reading when you filled up (in the old gas tracker: "Starting Odometer Reading")' },
+    { key: 'gallons', label: 'Gallons', required: true, aliases: ['gallons', 'gal', 'total gallons purchased', 'gallons purchased', 'qty'] },
+    { key: 'total_cost', label: 'Total price', required: true, aliases: ['total price', 'price', 'total', 'cost', 'amount', 'total cost'] },
+    { key: 'location', label: 'Station / location', aliases: ['location', 'fueling location', 'station', 'gas station'] },
+    { key: 'full_tank', label: 'Full tank? (Y/N)', aliases: ['full', 'full tank', 'filled'], hint: 'Blank = yes' },
+    { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comments'] },
   ],
 }
 

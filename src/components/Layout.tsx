@@ -26,7 +26,11 @@ export function useNav() {
   const main: NavItem[] = []
   const more: NavItem[] = []
   if (isDriver) {
-    main.push({ to: '/', label: 'Home', icon: 'home' }, { to: '/report', label: 'Report', icon: 'alert' })
+    main.push(
+      { to: '/', label: 'Home', icon: 'home' },
+      { to: '/report', label: 'Report', icon: 'alert' },
+      { to: '/fuel', label: 'Fuel', icon: 'fuel' },
+    )
   }
   if (isStaff) {
     main.push(
@@ -35,7 +39,10 @@ export function useNav() {
       { to: '/assets', label: 'Assets', icon: 'truck' },
       { to: '/parts', label: 'Parts', icon: 'box', badge: counts.low },
     )
-    more.push({ to: '/maintenance', label: 'Maintenance', icon: 'calendar', badge: counts.overdue })
+    more.push(
+      { to: '/fuel', label: 'Fuel', icon: 'fuel' },
+      { to: '/maintenance', label: 'Maintenance', icon: 'calendar', badge: counts.overdue },
+    )
   }
   if (isAdmin) {
     more.push(
@@ -55,6 +62,9 @@ const TITLES: [RegExp, string][] = [
   [/^\/work-orders\/.+/, 'Work order'],
   [/^\/work-orders/, 'Work orders'],
   [/^\/report/, 'Report a problem'],
+  [/^\/fuel\/new/, 'Log fuel'],
+  [/^\/fuel\/.+/, 'Fill-up'],
+  [/^\/fuel/, 'Fuel'],
   [/^\/assets\/.+/, 'Asset'],
   [/^\/assets/, 'Assets'],
   [/^\/parts\/reorder/, 'Reorder'],
@@ -88,6 +98,7 @@ export function ThemeToggle() {
 export function Layout() {
   const { main, more } = useNav()
   const { profile, signOut } = useAuth()
+  const dataError = useData().error
   const loc = useLocation()
   const nav = useNavigate()
   const title = TITLES.find(([re]) => re.test(loc.pathname))?.[1] ?? 'Fleet Repair Log'
@@ -140,6 +151,11 @@ export function Layout() {
           <ThemeToggle />
         </header>
         <main className="content">
+          {dataError && (
+            <div className="banner error" role="alert" style={{ marginBottom: 12 }}>
+              Some data couldn't load: {dataError}
+            </div>
+          )}
           <Outlet />
         </main>
         <nav className="tabbar" aria-label="Main navigation">

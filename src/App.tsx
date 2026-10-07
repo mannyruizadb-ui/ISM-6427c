@@ -24,6 +24,7 @@ import { Vendors } from './pages/Vendors'
 import { Import } from './pages/Import'
 import { Settings } from './pages/Settings'
 import { More } from './pages/More'
+import { Fuel, FuelDetail, FuelNew } from './pages/Fuel'
 
 function NotConfigured() {
   return (
@@ -62,6 +63,9 @@ function Shell() {
         <Route path="work-orders" element={<WorkOrders />} />
         <Route path="work-orders/new" element={<Guard allow="staff"><WorkOrderNew /></Guard>} />
         <Route path="work-orders/:id" element={<WorkOrderDetail />} />
+        <Route path="fuel" element={<Fuel />} />
+        <Route path="fuel/new" element={<FuelNew />} />
+        <Route path="fuel/:id" element={<FuelDetail />} />
         <Route path="assets" element={<Guard allow="staff"><Assets /></Guard>} />
         <Route path="assets/:id" element={<Guard allow="staff"><AssetDetail /></Guard>} />
         <Route path="parts" element={<Guard allow="staff"><Parts /></Guard>} />

@@ -3,12 +3,13 @@ import { Link } from 'react-router-dom'
 import { useData, useLookups, woCost } from '../state/data'
 import { daysBetween, fmtDate, fmtHours, fmtMoney, fmtMoney0, fmtNum, todayISO } from '../lib/format'
 import { exportPdf, type PdfSection } from '../lib/pdf'
+import { analyseFuel, summarise, type FuelRow } from '../lib/fuel'
 import type { Asset } from '../lib/types'
 import { EmptyState, PageHead, useToast } from '../components/ui'
 import { Icon } from '../components/Icon'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-type Tab = 'cost' | 'monthly' | 'downtime' | 'replace'
+type Tab = 'cost' | 'monthly' | 'downtime' | 'replace' | 'fuel'
 
 interface AssetRow {
   asset: Asset
@@ -32,8 +33,9 @@ export function Reports() {
   const years = useMemo(() => {
     const ys = new Set<number>([thisYear])
     for (const w of d.work_orders) ys.add(Number(w.opened_on.slice(0, 4)))
+    for (const f of d.fuel_logs) ys.add(Number(f.filled_on.slice(0, 4)))
     return [...ys].sort((a, b) => b - a)
-  }, [d.work_orders, thisYear])
+  }, [d.work_orders, d.fuel_logs, thisYear])
   const [year, setYear] = useState(thisYear)
   const [kind, setKind] = useState<'all' | 'truck' | 'equipment'>('all')
   const [tab, setTab] = useState<Tab>('cost')
@@ -84,6 +86,28 @@ export function Reports() {
     [rows, finById],
   )
 
+  // Fuel for the selected year, per vehicle, with repairs alongside for cost per mile.
+  const fuel = useMemo(() => {
+    const all = [...analyseFuel(d.fuel_logs).values()].filter((r) => Number(r.log.filled_on.slice(0, 4)) === year)
+    const yearRows = all.filter((r) => kind !== 'equipment' && (kind === 'all' || r.log.asset_id == null || d.assets.find((a) => a.id === r.log.asset_id)?.kind === 'truck'))
+    const groups = new Map<string, FuelRow[]>()
+    for (const r of yearRows) {
+      const k = r.log.asset_id ?? 'other'
+      groups.set(k, [...(groups.get(k) ?? []), r])
+    }
+    const repairsBy = new Map(rows.map((r) => [r.asset.id, r.total]))
+    const perVehicle = [...groups.entries()]
+      .map(([k, rs]) => {
+        const s = summarise(rs)
+        const repairs = k === 'other' ? 0 : repairsBy.get(k) ?? 0
+        return { key: k, label: k === 'other' ? 'Rentals / other' : d.assets.find((a) => a.id === k)?.label ?? '—', s, repairs, perMile: s.miles > 0 && s.costPerMile != null ? s.costPerMile + repairs / s.miles : null }
+      })
+      .sort((a, b) => b.s.cost - a.s.cost)
+    const months = Array(12).fill(0) as number[]
+    for (const r of yearRows) months[Number(r.log.filled_on.slice(5, 7)) - 1] += r.log.total_cost
+    return { total: summarise(yearRows), perVehicle, months }
+  }, [d.fuel_logs, d.assets, rows, year, kind])
+
   if (d.assets.length === 0) {
     return (
       <>
@@ -131,6 +155,23 @@ export function Reports() {
       ]),
       numeric: [1, 2, 3, 4, 5],
     },
+    ...(fuel.perVehicle.length
+      ? [
+          {
+            title: `Fuel per vehicle — ${periodLabel}`,
+            head: ['Vehicle', 'Fill-ups', 'Gallons', 'Fuel $', 'MPG', 'Fuel $/mi', 'Repairs $', 'Fuel + repairs $/mi'],
+            body: fuel.perVehicle.map((v) => [v.label, v.s.fills, fmtNum(Math.round(v.s.gallons)), fmtMoney(v.s.cost), v.s.mpg ? v.s.mpg.toFixed(1) : '—', v.s.costPerMile ? fmtMoney(v.s.costPerMile) : '—', fmtMoney(v.repairs), v.perMile ? fmtMoney(v.perMile) : '—']),
+            foot: ['Total', fuel.total.fills, fmtNum(Math.round(fuel.total.gallons)), fmtMoney(fuel.total.cost), fuel.total.mpg ? fuel.total.mpg.toFixed(1) : '—', fuel.total.costPerMile ? fmtMoney(fuel.total.costPerMile) : '—', '', ''],
+            numeric: [1, 2, 3, 4, 5, 6, 7],
+          },
+          {
+            title: `Fuel spend by month — ${year}`,
+            head: [...MONTHS, 'Total'],
+            body: [[...fuel.months.map((m) => (m ? fmtMoney0(m) : '')), fmtMoney0(fuel.total.cost)]],
+            numeric: Array.from({ length: 13 }, (_, i) => i),
+          },
+        ]
+      : []),
   ]
 
   const pdf = async () => {
@@ -184,6 +225,7 @@ export function Reports() {
         <div className="stat"><div className="label">Labor</div><div className="value" style={{ fontSize: '1.4rem' }}>{fmtMoney0(sum((r) => r.labor))}</div></div>
         <div className="stat"><div className="label">Outside vendors</div><div className="value" style={{ fontSize: '1.4rem' }}>{fmtMoney0(sum((r) => r.vendor))}</div></div>
         <div className="stat"><div className="label">Downtime</div><div className="value" style={{ fontSize: '1.4rem' }}>{fmtHours(sum((r) => r.downtime))}</div></div>
+        {kind !== 'equipment' && <div className="stat"><div className="label">Fuel</div><div className="value" style={{ fontSize: '1.4rem' }}>{fmtMoney0(fuel.total.cost)}</div></div>}
       </div>
 
       <div className="tabs" role="tablist">
@@ -192,6 +234,7 @@ export function Reports() {
           ['monthly', 'By month'],
           ['downtime', 'Downtime'],
           ['replace', 'Repair vs. replace'],
+          ['fuel', 'Fuel & cost per mile'],
         ] as const).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>
         ))}
@@ -302,6 +345,70 @@ export function Reports() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {tab === 'fuel' && (
+        fuel.perVehicle.length === 0 ? (
+          <EmptyState icon="fuel" title={`No fill-ups in ${year}`} action={<Link to="/fuel/new" className="btn primary">Log fuel</Link>}>
+            Fuel spend, MPG and cost per mile (fuel + repairs) per truck show up here.
+          </EmptyState>
+        ) : (
+          <div className="stack">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Vehicle</th>
+                    <th className="num">Fill-ups</th>
+                    <th className="num">Gallons</th>
+                    <th className="num">Fuel</th>
+                    <th className="num">MPG</th>
+                    <th className="num">Fuel $/mi</th>
+                    <th className="num">Repairs</th>
+                    <th className="num">Fuel + repairs $/mi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fuel.perVehicle.map((v) => (
+                    <tr key={v.key}>
+                      <td>{v.key === 'other' ? v.label : <Link to={`/assets/${v.key}`}>{v.label}</Link>}</td>
+                      <td className="num">{v.s.fills}</td>
+                      <td className="num">{fmtNum(Math.round(v.s.gallons))}</td>
+                      <td className="num"><strong>{fmtMoney(v.s.cost)}</strong></td>
+                      <td className="num">{v.s.mpg ? v.s.mpg.toFixed(1) : '—'}</td>
+                      <td className="num">{v.s.costPerMile ? fmtMoney(v.s.costPerMile) : '—'}</td>
+                      <td className="num">{fmtMoney(v.repairs)}</td>
+                      <td className="num"><strong>{v.perMile ? fmtMoney(v.perMile) : '—'}</strong></td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td>Total</td>
+                    <td className="num">{fuel.total.fills}</td>
+                    <td className="num">{fmtNum(Math.round(fuel.total.gallons))}</td>
+                    <td className="num">{fmtMoney(fuel.total.cost)}</td>
+                    <td className="num">{fuel.total.mpg ? fuel.total.mpg.toFixed(1) : '—'}</td>
+                    <td className="num">{fuel.total.costPerMile ? fmtMoney(fuel.total.costPerMile) : '—'}</td>
+                    <td />
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>{MONTHS.map((m) => <th key={m} className="num">{m}</th>)}<th className="num">Total</th></tr>
+                </thead>
+                <tbody>
+                  <tr>{fuel.months.map((m, i) => <td key={i} className="num">{m ? fmtMoney0(m) : <span className="muted">–</span>}</td>)}<td className="num"><strong>{fmtMoney0(fuel.total.cost)}</strong></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="small muted">MPG and per-mile figures only use stretches between two full-tank fill-ups with odometer readings, and skip entries flagged as unusual. Rentals have no odometer tracking, so they count toward spend only.</p>
+          </div>
+        )
       )}
 
       {tab === 'replace' && (

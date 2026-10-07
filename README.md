@@ -26,7 +26,7 @@ Rules are enforced in the database with Row Level Security, not just hidden in t
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor**, paste all of [`supabase/migrations/001_schema.sql`](supabase/migrations/001_schema.sql) and run it once, then do the same with [`002_fuel.sql`](supabase/migrations/002_fuel.sql). Together they create:
+2. Open **SQL Editor**, paste all of [`supabase/migrations/001_schema.sql`](supabase/migrations/001_schema.sql) and run it once, then do the same with [`002_fuel.sql`](supabase/migrations/002_fuel.sql) and [`003_repair_outcomes.sql`](supabase/migrations/003_repair_outcomes.sql), in that order. Together they create:
    - every table, with RLS enabled on each, and the policies
    - the triggers for stock deduction, PM reset and mileage
    - the private `work-order-photos` and `fuel-receipts` storage buckets
@@ -63,6 +63,18 @@ Rules are enforced in the database with Row Level Security, not just hidden in t
 - iPhone (Safari): Share → **Add to Home Screen**.
 - Android (Chrome): menu → **Install app**.
 
+## Repair outcomes and repeat problems
+
+- **Closing a work order asks "Is it really fixed?"**: *Fixed*, *Temporary fix* or *Not fixed* (the old log's "Problem Solved?" column).
+- **Each work order is an emergency/breakdown or maintenance.** Work orders linked to a maintenance schedule always count as maintenance.
+- **Notes for next time** (e.g. "check the keypad wiring first") show up whenever the same problem is logged again on that machine. Starting a new work order also lists how it was handled before.
+- **The dashboard shows repeat problems:**
+  - the same fault more than once in 6 months
+  - temporary fixes that were never followed by a real fix
+  - 3+ breakdowns in 90 days
+- **Reports → Reliability** shows emergency vs. maintenance per machine, temporary fixes, repeat problems and the most common problems fleet-wide.
+- **Maintenance → Starter schedules** adds standard tasks to every machine of a type in one go, e.g. lint clean-out (weekly), ignition probe clean (monthly) and full blow down (quarterly) on every dryer. When adding a single schedule, you can also apply it to the other machines of the same type.
+
 ## Fuel tracking
 
 - **One odometer reading per fill-up.** Miles and MPG come from the previous full-tank fill-up, so nobody goes back to edit an earlier row.
@@ -86,6 +98,9 @@ Rules are enforced in the database with Row Level Security, not just hidden in t
 1. **Trucks & equipment.** Import these first: repairs and parts are matched to assets by unit number or name.
 2. **Parts.** Unknown vendors are created. Existing part numbers are skipped.
 3. **Past repairs.** Parts cost goes in as a dollar amount and does not change inventory.
+   - The old equipment log's columns are recognised as they are: Machine, Issue, What Was Done, Repair Type, Downtime, Problem Solved?, Who Repaired It, Part Replaced, Part # and Notes.
+   - Downtime like "4 Hours" or "30 minutes" becomes hours. Text like "On and off for days" or "2 Days" is kept word-for-word in the notes, so nothing is guessed.
+   - "Truck 11" matches truck 11. Machines that don't exist yet can be added in one tap from the import screen.
    - Re-importing the same file creates duplicates.
 4. **Fuel log.** Map the old tracker's *Starting Odometer Reading* to "Odometer at fill-up".
    - Vehicles that aren't trucks in the app (Yaris, U-haul, Rental) are logged as "other". Add the Yaris as a truck first if you want its MPG.

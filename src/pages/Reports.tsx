@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { repeatAlerts, similarProblem, shortProblem } from '../lib/reliability'
 import { Link } from 'react-router-dom'
 import { useData, useLookups, woCost } from '../state/data'
 import { daysBetween, fmtDate, fmtHours, fmtMoney, fmtMoney0, fmtNum, todayISO } from '../lib/format'
@@ -9,7 +11,7 @@ import { EmptyState, PageHead, useToast } from '../components/ui'
 import { Icon } from '../components/Icon'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-type Tab = 'cost' | 'monthly' | 'downtime' | 'replace' | 'fuel'
+type Tab = 'cost' | 'monthly' | 'downtime' | 'replace' | 'fuel' | 'reliability'
 
 interface AssetRow {
   asset: Asset
@@ -38,7 +40,8 @@ export function Reports() {
   }, [d.work_orders, d.fuel_logs, thisYear])
   const [year, setYear] = useState(thisYear)
   const [kind, setKind] = useState<'all' | 'truck' | 'equipment'>('all')
-  const [tab, setTab] = useState<Tab>('cost')
+  const [params] = useSearchParams()
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'cost')
   const [busy, setBusy] = useState(false)
 
   const rows = useMemo<AssetRow[]>(() => {
@@ -108,6 +111,49 @@ export function Reports() {
     return { total: summarise(yearRows), perVehicle, months }
   }, [d.fuel_logs, d.assets, rows, year, kind])
 
+  // Reliability: emergency vs maintenance, outcomes, and the problems that keep coming back.
+  const reliability = useMemo(() => {
+    const inYear = d.work_orders.filter((w) => Number(w.opened_on.slice(0, 4)) === year && rows.some((r) => r.asset.id === w.asset_id))
+    const alerts = repeatAlerts(d.work_orders, rows.map((r) => r.asset), { sameProblemDays: 365 })
+    const perAsset = rows
+      .map((r) => {
+        const ws = inYear.filter((w) => w.asset_id === r.asset.id)
+        const emergency = ws.filter((w) => w.repair_type === 'emergency').length
+        return {
+          asset: r.asset,
+          repairs: ws.length,
+          emergency,
+          maintenance: ws.length - emergency,
+          temporary: ws.filter((w) => w.resolution === 'temporary' || w.resolution === 'not_fixed').length,
+          repeats: alerts.filter((a) => a.asset.id === r.asset.id && a.kind === 'same_problem').length,
+          downtime: r.downtime,
+        }
+      })
+      .filter((x) => x.repairs > 0)
+      .sort((a, b) => b.emergency - a.emergency || b.downtime - a.downtime)
+    // Fleet-wide most common problems (grouped by similar wording).
+    const groups: { label: string; count: number; assets: Set<string>; downtime: number }[] = []
+    for (const w of inYear) {
+      if (w.repair_type === 'maintenance' || /^\s*(nothing|none)\s*$/i.test(w.problem)) continue
+      const g = groups.find((x) => similarProblem(x.label, w.problem))
+      const label = rows.find((r) => r.asset.id === w.asset_id)?.asset.label ?? ''
+      if (g) {
+        g.count++
+        g.assets.add(label)
+        g.downtime += w.downtime_hours
+      } else groups.push({ label: shortProblem(w.problem, 50), count: 1, assets: new Set([label]), downtime: w.downtime_hours })
+    }
+    const total = inYear.length
+    const emergencyAll = inYear.filter((w) => w.repair_type === 'emergency').length
+    return {
+      perAsset,
+      top: groups.filter((g) => g.count >= 2).sort((a, b) => b.count - a.count).slice(0, 10),
+      total,
+      emergencyShare: total ? emergencyAll / total : null,
+      temporary: inYear.filter((w) => w.resolution === 'temporary' || w.resolution === 'not_fixed').length,
+    }
+  }, [d.work_orders, rows, year])
+
   if (d.assets.length === 0) {
     return (
       <>
@@ -155,6 +201,22 @@ export function Reports() {
       ]),
       numeric: [1, 2, 3, 4, 5],
     },
+    ...(reliability.perAsset.length
+      ? [
+          {
+            title: `Reliability — ${periodLabel}`,
+            head: ['Asset', 'Repairs', 'Emergency', 'Maintenance', 'Emergency %', 'Temporary / not fixed', 'Repeat problems', 'Downtime (h)'],
+            body: reliability.perAsset.map((x) => [x.asset.label, x.repairs, x.emergency, x.maintenance, `${Math.round((x.emergency / x.repairs) * 100)}%`, x.temporary, x.repeats, fmtNum(x.downtime)]),
+            numeric: [1, 2, 3, 4, 5, 6, 7],
+          },
+          {
+            title: `Most common problems — ${periodLabel}`,
+            head: ['Problem', 'Times', 'Machines', 'Downtime (h)'],
+            body: reliability.top.map((g) => [g.label, g.count, [...g.assets].join(', '), fmtNum(g.downtime)]),
+            numeric: [1, 3],
+          },
+        ]
+      : []),
     ...(fuel.perVehicle.length
       ? [
           {
@@ -235,6 +297,7 @@ export function Reports() {
           ['downtime', 'Downtime'],
           ['replace', 'Repair vs. replace'],
           ['fuel', 'Fuel & cost per mile'],
+          ['reliability', 'Reliability'],
         ] as const).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>
         ))}
@@ -345,6 +408,89 @@ export function Reports() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {tab === 'reliability' && (
+        reliability.total === 0 ? (
+          <EmptyState icon="wrench" title={`No repairs in ${year}`}>
+            Emergency vs. maintenance, temporary fixes and the problems that keep coming back show up here.
+          </EmptyState>
+        ) : (
+          <div className="stack">
+            <div className="stats">
+              <div className={`stat${reliability.emergencyShare != null && reliability.emergencyShare > 0.6 ? ' warn' : ''}`}>
+                <div className="label">Emergency repairs</div>
+                <div className="value">{reliability.emergencyShare != null ? `${Math.round(reliability.emergencyShare * 100)}%` : '—'}</div>
+                <div className="small muted">of {reliability.total} work orders</div>
+              </div>
+              <div className={`stat${reliability.temporary ? ' warn' : ''}`}>
+                <div className="label">Temporary / not fixed</div>
+                <div className="value">{reliability.temporary}</div>
+              </div>
+            </div>
+            {reliability.emergencyShare != null && reliability.emergencyShare > 0.6 && (
+              <p className="small muted">
+                Most work is breakdowns rather than planned maintenance. The machines at the top of this list are where a
+                maintenance schedule is most likely to pay off.
+              </p>
+            )}
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Asset</th>
+                    <th className="num">Repairs</th>
+                    <th className="num">Emergency</th>
+                    <th className="num">Maintenance</th>
+                    <th className="num">Temp / not fixed</th>
+                    <th className="num">Repeat problems</th>
+                    <th className="num">Downtime</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reliability.perAsset.map((x) => (
+                    <tr key={x.asset.id}>
+                      <td><Link to={`/assets/${x.asset.id}`}>{x.asset.label}</Link></td>
+                      <td className="num">{x.repairs}</td>
+                      <td className="num"><strong>{x.emergency}</strong></td>
+                      <td className="num">{x.maintenance}</td>
+                      <td className="num">{x.temporary || ''}</td>
+                      <td className="num">{x.repeats ? <span className="pill danger">{x.repeats}</span> : ''}</td>
+                      <td className="num">{fmtHours(x.downtime)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {reliability.top.length > 0 && (
+              <>
+                <h2>Most common problems</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Problem</th>
+                        <th className="num">Times</th>
+                        <th>Machines</th>
+                        <th className="num">Downtime</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reliability.top.map((g) => (
+                        <tr key={g.label}>
+                          <td>{g.label}</td>
+                          <td className="num"><strong>{g.count}</strong></td>
+                          <td>{[...g.assets].join(', ')}</td>
+                          <td className="num">{fmtHours(g.downtime)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )
       )}
 
       {tab === 'fuel' && (

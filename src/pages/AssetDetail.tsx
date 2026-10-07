@@ -12,6 +12,8 @@ import { ConfirmButton, EmptyState, Field, Segmented, Sheet, StatusPill, useToas
 import { Icon } from '../components/Icon'
 import { analyseFuel, summarise, type FuelRow } from '../lib/fuel'
 import { FuelRowItem } from './Fuel'
+import { repeatAlerts } from '../lib/reliability'
+import { RepeatAlerts } from '../components/RepeatAlerts'
 
 export function AssetDetail() {
   const { id } = useParams()
@@ -31,6 +33,7 @@ export function AssetDetail() {
   const pms = d.pm_schedules.filter((s) => s.asset_id === id)
   const fits = d.part_fits.filter((x) => x.asset_id === id).map((x) => d.parts.find((p) => p.id === x.part_id)).filter(Boolean)
   const fin = d.asset_financials.find((x) => x.asset_id === id)
+  const repeats = useMemo(() => (asset ? repeatAlerts(d.work_orders, [asset]) : []), [d.work_orders, asset])
   const fuelRows = useMemo(
     () =>
       [...analyseFuel(d.fuel_logs).values()]
@@ -103,6 +106,13 @@ export function AssetDetail() {
           )}
         </div>
       </div>
+
+      {repeats.length > 0 && (
+        <section className="card">
+          <h2 style={{ marginBottom: 12 }}>Repeat problems</h2>
+          <RepeatAlerts alerts={repeats} />
+        </section>
+      )}
 
       <section className="card">
         <div className="field">

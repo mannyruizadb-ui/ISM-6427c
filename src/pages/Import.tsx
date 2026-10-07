@@ -2,13 +2,15 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useData } from '../state/data'
 import { supabase, must } from '../lib/supabase'
-import { autoMap, downloadText, FIELDS, parseCsv, parseDateLoose, templateCsv, type ImportKind } from '../lib/csv'
+import { autoMap, downloadText, FIELDS, guessAsset, parseCsv, parseDateLoose, parseDowntime, parseRepairType, parseResolution, stripVehiclePrefix, templateCsv, type ImportKind } from '../lib/csv'
 import { toNum, todayISO } from '../lib/format'
 import { EQUIPMENT_TYPES, type Asset, type EquipmentType, type Vendor } from '../lib/types'
 import { PageHead, Segmented, useToast } from '../components/ui'
 import { Icon } from '../components/Icon'
 
 interface Prepared {
+  /** Machine names in a repairs file that don't exist yet (can be created in one tap). */
+  missing: string[]
   ok: any[]
   skipped: { line: number; reason: string }[]
   errors: { line: number; reason: string }[]
@@ -51,10 +53,11 @@ export function Import() {
 
   const prepared = useMemo<Prepared | null>(() => {
     if (!file) return null
-    const out: Prepared = { ok: [], skipped: [], errors: [] }
-    const missing = FIELDS[kind].filter((f) => f.required && !map[f.key])
-    if (missing.length) {
-      out.errors.push({ line: 0, reason: `Map a column for: ${missing.map((m) => m.label).join(', ')}` })
+    const out: Prepared = { missing: [], ok: [], skipped: [], errors: [] }
+    const missing = new Set<string>()
+    const unmapped = FIELDS[kind].filter((f) => f.required && !map[f.key])
+    if (unmapped.length) {
+      out.errors.push({ line: 0, reason: `Map a column for: ${unmapped.map((m) => m.label).join(', ')}` })
       return out
     }
     const assetKey = (a: Pick<Asset, 'kind' | 'label'>) => `${a.kind}:${a.label.toLowerCase()}`
@@ -155,9 +158,14 @@ export function Import() {
             source: 'import',
           })
         } else {
-          const label = get(row, 'asset')
-          const asset = assetByLabel.get(label.toLowerCase())
-          if (!asset) throw new Error(`no asset called “${label}” — import assets first`)
+          const label = get(row, 'asset').replace(/\s+/g, ' ')
+          const bare = stripVehiclePrefix(label)
+          const asset = assetByLabel.get(label.toLowerCase()) ?? (bare ? assetByLabel.get(bare.toLowerCase()) : undefined)
+          if (!label) throw new Error('missing asset')
+          if (!asset) {
+            missing.add(label)
+            throw new Error(`no asset called “${label}”`)
+          }
           const date = parseDateLoose(get(row, 'date'))
           if (!date) throw new Error(`can't read date “${get(row, 'date')}”`)
           if (date > todayISO()) throw new Error('date is in the future')
@@ -169,6 +177,13 @@ export function Import() {
             if (raw && (n == null || n < 0)) throw new Error(`${k.replace('_', ' ')} “${raw}” is not a number`)
             return n ?? 0
           }
+          const down = parseDowntime(get(row, 'downtime_hours'))
+          const isNone = (v: string) => !v || /^(none|0|n\/a|-)$/i.test(v.trim())
+          const part = get(row, 'part_replaced')
+          const partNo = get(row, 'part_number')
+          const partText = !isNone(part) ? `Part replaced: ${part.replace(/\s+/g, ' ')}${!isNone(partNo) ? ` (${partNo.replace(/\s+/g, ' ')})` : ''}` : !isNone(partNo) ? `Part #: ${partNo.replace(/\s+/g, ' ')}` : null
+          const fix = [get(row, 'fix'), partText].filter(Boolean).join('\n') || null
+          const notes = [get(row, 'notes'), down.note].filter(Boolean).join('\n') || null
           const st = get(row, 'status').toLowerCase()
           const status = !st || /done|closed|complete|fixed/.test(st) ? 'done' : /part/.test(st) ? 'waiting_parts' : 'open'
           const miles = toNum(get(row, 'mileage'))
@@ -177,9 +192,12 @@ export function Import() {
               asset_id: asset.id,
               opened_on: date,
               problem,
-              fix: get(row, 'fix') || null,
+              fix,
+              notes,
+              repair_type: parseRepairType(get(row, 'repair_type')),
+              resolution: status === 'done' ? parseResolution(get(row, 'resolution')) : null,
               labor_hours: num('labor_hours'),
-              downtime_hours: num('downtime_hours'),
+              downtime_hours: down.hours,
               mileage: asset.kind === 'truck' && miles != null && miles >= 0 ? Math.round(miles) : null,
               status,
               closed_at: status === 'done' ? `${date}T12:00:00` : null,
@@ -195,8 +213,24 @@ export function Import() {
         out.errors.push({ line, reason: (e as Error).message })
       }
     })
+    out.missing = [...missing]
     return out
   }, [file, map, kind, d.assets, d.parts, d.fuel_logs])
+
+  const createMissing = async () => {
+    if (!prepared?.missing.length) return
+    setBusy(true)
+    try {
+      const rows = prepared.missing.map((name) => guessAsset(name))
+      const saved = must(await supabase.from('assets').insert(rows).select()) as Asset[]
+      saved.forEach((a) => d.upsertLocal('assets', a))
+      toast(`Added ${saved.length} machines. Check their types under Assets.`)
+    } catch (e) {
+      toast((e as Error).message, true)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const run = async () => {
     if (!prepared || !prepared.ok.length) return
@@ -367,6 +401,22 @@ export function Import() {
                 <summary style={{ cursor: 'pointer' }}>Show skipped rows</summary>
                 <ul className="small">{prepared.skipped.slice(0, 100).map((s, i) => <li key={i}>Line {s.line}: {s.reason}</li>)}</ul>
               </details>
+            )}
+            {prepared.missing.length > 0 && (
+              <div className="banner warn">
+                <div style={{ marginBottom: 8 }}>
+                  {prepared.missing.length} machine{prepared.missing.length === 1 ? '' : 's'} in this file {prepared.missing.length === 1 ? "isn't" : "aren't"} in the app yet: {prepared.missing.join(', ')}.
+                  Add them now (type is guessed from the name — “Dryer 3” → dryer, “Truck 11” → truck 11), or fix the names in the file if any is a typo.
+                </div>
+                <button className="btn primary" disabled={busy} onClick={createMissing}>
+                  Add {prepared.missing.length} machine{prepared.missing.length === 1 ? '' : 's'}
+                </button>
+              </div>
+            )}
+            {kind === 'repairs' && prepared.ok.some((r) => r.wo.notes?.includes('Downtime: ')) && (
+              <div className="banner info">
+                {prepared.ok.filter((r) => r.wo.notes?.includes('Downtime: ')).length} rows have downtime written as text (“On and off”, “2 Days”…). It's kept word-for-word in the notes and counted as 0 hours, so edit those work orders if you want the hours in reports.
+              </div>
             )}
             {otherVehicles.length > 0 && (
               <div className="banner warn">Not trucks in the app — these will be logged as rentals / other, with no MPG: {otherVehicles.join(', ')}. If any is a fleet vehicle, add it under Assets first, then re-import.</div>

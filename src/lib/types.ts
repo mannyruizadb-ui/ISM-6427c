@@ -90,6 +90,8 @@ export interface PmSchedule {
 }
 
 export type WoStatus = 'open' | 'waiting_parts' | 'done'
+export type Resolution = 'fixed' | 'temporary' | 'not_fixed'
+export type RepairType = 'emergency' | 'maintenance'
 export const WO_STATUSES: WoStatus[] = ['open', 'waiting_parts', 'done']
 
 export interface WorkOrder {
@@ -111,6 +113,9 @@ export interface WorkOrder {
   status: WoStatus
   pm_schedule_id: string | null
   source: 'app' | 'driver' | 'import'
+  resolution: Resolution | null
+  repair_type: RepairType
+  notes: string | null
   closed_at: string | null
   created_at: string
   updated_at: string

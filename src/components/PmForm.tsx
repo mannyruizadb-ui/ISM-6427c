@@ -6,14 +6,37 @@ import type { PmSchedule } from '../lib/types'
 import { AssetPicker } from './AssetPicker'
 import { ConfirmButton, Field, Sheet, useToast } from './ui'
 
-const PRESETS = {
+export interface PmPreset {
+  task: string
+  miles: number | null
+  days: number | null
+  notes?: string
+}
+
+/** Suggested schedules by asset type. Intervals are starting points — adjust to the manufacturer's manual. */
+export const PRESETS: Record<string, PmPreset[]> = {
+  dryer: [
+    { task: 'Lint compartment clean-out', miles: null, days: 7, notes: 'Lint build-up is a common cause of burner and exhaust high-limit faults.' },
+    { task: 'Ignition probe & connector clean', miles: null, days: 30, notes: 'Dirty probes are a common cause of ignition faults.' },
+    { task: 'Full blow down', miles: null, days: 90 },
+  ],
+  washer: [
+    { task: 'Monthly service', miles: null, days: 30 },
+    { task: 'Door lock & gasket check', miles: null, days: 90 },
+    { task: 'Belt & bearing check', miles: null, days: 90 },
+  ],
+  ironer: [
+    { task: 'Burner & thermostat check', miles: null, days: 90 },
+    { task: 'Ribbon & feed check', miles: null, days: 30 },
+  ],
+  folder: [{ task: 'Monthly service', miles: null, days: 30 }],
   truck: [
     { task: 'Oil & filter change', miles: 5000, days: 180 },
     { task: 'Tire rotation', miles: 7500, days: null },
     { task: 'Brake inspection', miles: 15000, days: 365 },
     { task: 'DOT annual inspection', miles: null, days: 365 },
   ],
-  equipment: [
+  other: [
     { task: 'Monthly service', miles: null, days: 30 },
     { task: 'Quarterly service', miles: null, days: 90 },
     { task: 'Belt & bearing check', miles: null, days: 90 },
@@ -37,6 +60,13 @@ export function PmForm({ schedule, assetId, onClose }: { schedule?: PmSchedule; 
   const [busy, setBusy] = useState(false)
   const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }))
   const isTruck = asset?.kind === 'truck'
+  const presetKey = asset ? (asset.kind === 'truck' ? 'truck' : asset.equipment_type ?? 'other') : 'other'
+  const presets = PRESETS[presetKey] ?? PRESETS.other
+  // Same-type machines that don't have this task yet (e.g. "add to the other 3 dryers").
+  const peers = asset && !schedule && asset.kind === 'equipment'
+    ? d.assets.filter((a) => a.id !== asset.id && !a.retired_at && a.kind === 'equipment' && a.equipment_type === asset.equipment_type)
+    : []
+  const [alsoPeers, setAlsoPeers] = useState(true)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -62,7 +92,14 @@ export function PmForm({ schedule, assetId, onClose }: { schedule?: PmSchedule; 
           : await supabase.from('pm_schedules').insert(row).select().single(),
       ) as PmSchedule
       d.upsertLocal('pm_schedules', saved)
-      toast('Schedule saved')
+      const targets = alsoPeers
+        ? peers.filter((a) => !d.pm_schedules.some((s) => s.asset_id === a.id && s.task.toLowerCase() === row.task.toLowerCase()))
+        : []
+      if (targets.length) {
+        const more = must(await supabase.from('pm_schedules').insert(targets.map((a) => ({ ...row, asset_id: a.id }))).select()) as PmSchedule[]
+        more.forEach((m) => d.upsertLocal('pm_schedules', m))
+      }
+      toast(targets.length ? `Schedule saved for ${targets.length + 1} machines` : 'Schedule saved')
       onClose()
     } catch (err) {
       toast((err as Error).message, true)
@@ -111,7 +148,7 @@ export function PmForm({ schedule, assetId, onClose }: { schedule?: PmSchedule; 
               <div className="field">
                 <span className="label">Quick pick</span>
                 <div className="chips" style={{ flexWrap: 'wrap' }}>
-                  {PRESETS[asset.kind].map((p) => (
+                  {presets.map((p) => (
                     <button
                       key={p.task}
                       type="button"
@@ -123,6 +160,7 @@ export function PmForm({ schedule, assetId, onClose }: { schedule?: PmSchedule; 
                           task: p.task,
                           interval_miles: p.miles ? String(p.miles) : '',
                           interval_days: p.days ? String(p.days) : '',
+                          notes: p.notes ?? x.notes,
                         }))
                       }
                     >
@@ -158,6 +196,12 @@ export function PmForm({ schedule, assetId, onClose }: { schedule?: PmSchedule; 
             <p className="small muted">
               These reset automatically when a work order linked to this schedule is closed.
             </p>
+            {peers.length > 0 && (
+              <label className="check">
+                <input type="checkbox" checked={alsoPeers} onChange={(e) => setAlsoPeers(e.target.checked)} />
+                Also add to the other {peers.length} {asset.equipment_type}{peers.length === 1 ? '' : 's'} ({peers.map((p) => p.label).join(', ')})
+              </label>
+            )}
             <Field label="Notes" htmlFor="pnotes">
               <textarea id="pnotes" value={f.notes} onChange={(e) => set('notes', e.target.value)} />
             </Field>

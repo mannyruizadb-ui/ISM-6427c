@@ -9,6 +9,8 @@ import { Icon } from '../components/Icon'
 import { supabase } from '../lib/supabase'
 import { analyseFuel, SERIOUS, summarise } from '../lib/fuel'
 import { FuelRowItem, periodStart } from './Fuel'
+import { repeatAlerts } from '../lib/reliability'
+import { RepeatAlerts } from '../components/RepeatAlerts'
 
 function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`
@@ -46,6 +48,7 @@ function StaffHome() {
   const attention = pm.filter((s) => s.state !== 'ok').slice(0, 6)
   const low = d.parts.filter((p) => !p.retired_at && p.qty_on_hand <= p.reorder_point)
   const down = d.assets.filter((a) => !a.retired_at && a.status === 'down')
+  const repeats = useMemo(() => repeatAlerts(d.work_orders, d.assets), [d.work_orders, d.assets])
   const fuel = useMemo(() => {
     const rows = [...analyseFuel(d.fuel_logs).values()]
     const month = rows.filter((r) => r.log.filled_on >= periodStart('month')!)
@@ -94,6 +97,19 @@ function StaffHome() {
           </Link>
         )}
       </div>
+
+      {repeats.length > 0 && (
+        <section className="card" style={{ marginBottom: 12 }}>
+          <div className="card-head">
+            <div>
+              <h2>Repeat problems ({repeats.length})</h2>
+              <p className="small muted">The same fault coming back, temporary fixes still standing, and machines breaking down often.</p>
+            </div>
+            <Link to="/reports?tab=reliability" className="btn ghost">Reliability report</Link>
+          </div>
+          <RepeatAlerts alerts={repeats} limit={5} />
+        </section>
+      )}
 
       <div className="grid grid-2">
         <section className="card">

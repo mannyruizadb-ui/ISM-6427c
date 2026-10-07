@@ -4,7 +4,8 @@ import { useAuth, useRole } from '../state/auth'
 import { useData, useLookups, woCost } from '../state/data'
 import { supabase, must } from '../lib/supabase'
 import { fmtDate, fmtMiles, fmtMoney, fmtNum, toNum } from '../lib/format'
-import type { Part, WoStatus, WorkOrder, WorkOrderPart } from '../lib/types'
+import type { Part, Resolution, WoStatus, WorkOrder, WorkOrderPart } from '../lib/types'
+import { similarHistory } from '../lib/reliability'
 import { WorkOrderPhotos } from '../components/Photos'
 import { ConfirmButton, EmptyState, Field, Search, Segmented, Sheet, Spinner, Stepper, StatusPill, useToast } from '../components/ui'
 import { Icon } from '../components/Icon'
@@ -94,6 +95,8 @@ function StaffView({ wo }: { wo: WorkOrder }) {
       opened_on: wo.opened_on,
       assign: wo.assigned_to ? `p:${wo.assigned_to}` : wo.vendor_id ? `v:${wo.vendor_id}` : '',
       pm_schedule_id: wo.pm_schedule_id ?? '',
+      repair_type: wo.repair_type,
+      notes: wo.notes ?? '',
       labor_rate: String(cost?.labor_rate ?? 0),
       vendor_cost: String(cost?.vendor_cost ?? 0),
       other_parts_cost: String(cost?.other_parts_cost ?? 0),
@@ -142,6 +145,8 @@ function StaffView({ wo }: { wo: WorkOrder }) {
             assigned_to: f.assign.startsWith('p:') ? f.assign.slice(2) : null,
             vendor_id: f.assign.startsWith('v:') ? f.assign.slice(2) : null,
             pm_schedule_id: f.pm_schedule_id || null,
+            repair_type: f.repair_type,
+            notes: f.notes.trim() || null,
             ...extra,
           })
           .eq('id', wo.id)
@@ -213,7 +218,11 @@ function StaffView({ wo }: { wo: WorkOrder }) {
             {wo.closed_at && ` · closed ${fmtDate(wo.closed_at)}`}
           </p>
         </div>
-        <StatusPill status={wo.status} />
+        <div className="actions">
+          <StatusPill status={wo.repair_type} />
+          {wo.resolution && <StatusPill status={wo.resolution} />}
+          <StatusPill status={wo.status} />
+        </div>
       </div>
 
       {asset?.status === 'down' && wo.status !== 'done' && (
@@ -241,8 +250,24 @@ function StaffView({ wo }: { wo: WorkOrder }) {
         <Field label="Problem" htmlFor="problem">
           <textarea id="problem" value={f.problem} onChange={(e) => set('problem', e.target.value)} />
         </Field>
+        <div className="field">
+          <span className="label">Type</span>
+          <Segmented
+            label="Repair type"
+            value={f.pm_schedule_id ? 'maintenance' : f.repair_type}
+            onChange={(v) => set('repair_type', v)}
+            options={[
+              { value: 'emergency', label: 'Emergency / breakdown' },
+              { value: 'maintenance', label: 'Maintenance' },
+            ]}
+          />
+          {f.pm_schedule_id && <span className="hint">Linked to scheduled maintenance, so it counts as maintenance.</span>}
+        </div>
         <Field label="Fix / work done" htmlFor="fix">
           <textarea id="fix" value={f.fix} onChange={(e) => set('fix', e.target.value)} placeholder="What was done" />
+        </Field>
+        <Field label="Notes for next time" htmlFor="notes" hint="Shown whenever this problem comes up again on this machine.">
+          <textarea id="notes" value={f.notes} onChange={(e) => set('notes', e.target.value)} placeholder="e.g. Check the keypad wiring first" />
         </Field>
         <div className="form-grid">
           <Field label="Labor hours" htmlFor="hours">
@@ -291,6 +316,8 @@ function StaffView({ wo }: { wo: WorkOrder }) {
           )}
         </div>
       </section>
+
+      <SimilarHistory wo={wo} />
 
       <section className="card">
         <div className="card-head">
@@ -429,9 +456,9 @@ function StaffView({ wo }: { wo: WorkOrder }) {
           f={f}
           assetDown={asset?.status === 'down'}
           onClose={() => setClosing(false)}
-          onDone={async (fix, hours, downtime, backInService) => {
+          onDone={async (fix, hours, downtime, resolution, backInService) => {
             setF((x) => ({ ...x, fix, labor_hours: hours, downtime_hours: downtime }))
-            const ok = await saveClose(fix, hours, downtime)
+            const ok = await saveClose(fix, hours, downtime, resolution)
             if (ok && backInService && asset) {
               const { error } = await supabase.from('assets').update({ status: 'in_service' }).eq('id', asset.id)
               if (error) toast(error.message, true)
@@ -443,12 +470,12 @@ function StaffView({ wo }: { wo: WorkOrder }) {
     </div>
   )
 
-  async function saveClose(fix: string, hours: number, downtime: number) {
+  async function saveClose(fix: string, hours: number, downtime: number, resolution: Resolution) {
     try {
       const upd = must(
         await supabase
           .from('work_orders')
-          .update({ status: 'done', fix: fix.trim() || null, labor_hours: hours, downtime_hours: downtime })
+          .update({ status: 'done', fix: fix.trim() || null, labor_hours: hours, downtime_hours: downtime, resolution })
           .eq('id', wo.id)
           .select()
           .single(),
@@ -475,8 +502,9 @@ function CloseSheet({
   f: { fix: string; labor_hours: number; downtime_hours: number }
   assetDown: boolean
   onClose: () => void
-  onDone: (fix: string, hours: number, downtime: number, backInService: boolean) => Promise<void>
+  onDone: (fix: string, hours: number, downtime: number, resolution: Resolution, backInService: boolean) => Promise<void>
 }) {
+  const [resolution, setResolution] = useState<Resolution | null>(null)
   const [fix, setFix] = useState(f.fix)
   const [hours, setHours] = useState(f.labor_hours)
   const [down, setDown] = useState(f.downtime_hours)
@@ -493,10 +521,11 @@ function CloseSheet({
           </button>
           <button
             className="btn primary"
-            disabled={busy}
+            disabled={busy || !resolution}
             onClick={async () => {
+              if (!resolution) return
               setBusy(true)
-              await onDone(fix, hours, down, assetDown && back)
+              await onDone(fix, hours, down, resolution, assetDown && back && resolution !== 'not_fixed')
               setBusy(false)
             }}
           >
@@ -506,6 +535,24 @@ function CloseSheet({
       }
     >
       <div className="form">
+        <div className="field">
+          <span className="label">Is it really fixed?</span>
+          <Segmented
+            label="Outcome"
+            value={resolution ?? ('' as Resolution)}
+            onChange={setResolution}
+            options={[
+              { value: 'fixed', label: 'Fixed' },
+              { value: 'temporary', label: 'Temporary fix' },
+              { value: 'not_fixed', label: 'Not fixed' },
+            ]}
+          />
+          <span className="hint">
+            {resolution === 'temporary' && 'It works for now. It stays on the dashboard until a later repair fixes it for good.'}
+            {resolution === 'not_fixed' && 'Closing without a fix (e.g. waiting on an outside tech). It stays flagged.'}
+            {!resolution && 'Pick one. This is how repeat problems get caught.'}
+          </span>
+        </div>
         <Field label="What was done?" htmlFor="cfix">
           <textarea id="cfix" value={fix} onChange={(e) => setFix(e.target.value)} />
         </Field>
@@ -636,5 +683,39 @@ function AddPartSheet({
         </div>
       )}
     </Sheet>
+  )
+}
+
+/* ---------------- Same problem before ---------------- */
+function SimilarHistory({ wo }: { wo: WorkOrder }) {
+  const d = useData()
+  const { profileById } = useLookups()
+  const past = useMemo(
+    () => similarHistory(d.work_orders, wo.asset_id, wo.problem, wo.id).filter((w) => w.opened_on <= wo.opened_on || w.number < wo.number),
+    [d.work_orders, wo],
+  )
+  if (!past.length) return null
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>This problem before ({past.length})</h2>
+      </div>
+      <div className="list">
+        {past.slice(0, 5).map((w) => (
+          <Link key={w.id} to={`/work-orders/${w.id}`} className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div className="grow" style={{ minWidth: 200 }}>
+              <div className="title">
+                {fmtDate(w.opened_on)} · {w.fix || w.problem}
+              </div>
+              <div className="meta">
+                {[profileById.get(w.assigned_to ?? '')?.full_name ?? w.assigned_name, w.downtime_hours ? `${fmtNum(w.downtime_hours)} h down` : null].filter(Boolean).join(' · ')}
+              </div>
+              {w.notes && <div className="small" style={{ marginTop: 4 }}>📝 {w.notes}</div>}
+            </div>
+            {w.resolution ? <StatusPill status={w.resolution} /> : <StatusPill status={w.status} />}
+          </Link>
+        ))}
+      </div>
+    </section>
   )
 }

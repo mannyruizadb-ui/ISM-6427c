@@ -18,14 +18,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
+  // Id of the user whose profile we've finished fetching; avoids flashing the
+  // "waiting for approval" screen between sign-in and the profile arriving.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null)
 
   const loadProfile = useCallback(async (userId: string | undefined) => {
     if (!userId) {
       setProfile(null)
+      setLoadedFor(null)
       return
     }
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     setProfile((data as Profile) ?? null)
+    setLoadedFor(userId)
   }, [])
 
   useEffect(() => {
@@ -71,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     profile,
     role: profile && profile.active ? profile.role : null,
-    loading,
+    loading: loading || (!!session && loadedFor !== session.user.id),
     refreshProfile: () => loadProfile(userId),
     signOut: async () => {
       await supabase.auth.signOut()

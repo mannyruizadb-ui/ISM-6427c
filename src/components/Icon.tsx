@@ -27,6 +27,7 @@ const PATHS: Record<string, string> = {
   cart: 'M3 4h2l2.5 11h11L21 7H6.2M9 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm9 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2z',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
   edit: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
+  fuel: 'M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M3 21h12M6 8h6M14 10h2a2 2 0 0 1 2 2v4a1.5 1.5 0 0 0 3 0V8l-3-3',
   factory: 'M3 21V10l6 4V10l6 4V4h6v17zM7 18h2M12 18h2M17 18h2',
 }
 

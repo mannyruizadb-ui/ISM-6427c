@@ -90,6 +90,8 @@ export interface PmSchedule {
 }
 
 export type WoStatus = 'open' | 'waiting_parts' | 'done'
+export type Resolution = 'fixed' | 'temporary' | 'not_fixed'
+export type RepairType = 'emergency' | 'maintenance'
 export const WO_STATUSES: WoStatus[] = ['open', 'waiting_parts', 'done']
 
 export interface WorkOrder {
@@ -111,6 +113,9 @@ export interface WorkOrder {
   status: WoStatus
   pm_schedule_id: string | null
   source: 'app' | 'driver' | 'import'
+  resolution: Resolution | null
+  repair_type: RepairType
+  notes: string | null
   closed_at: string | null
   created_at: string
   updated_at: string
@@ -153,4 +158,22 @@ export interface WorkOrderTotal {
   parts_cost: number
   vendor_cost: number
   total_cost: number
+}
+
+export interface FuelLog {
+  id: string
+  asset_id: string | null
+  vehicle_label: string | null
+  filled_on: string
+  odometer: number | null
+  gallons: number
+  total_cost: number
+  full_tank: boolean
+  location: string | null
+  notes: string | null
+  receipt_path: string | null
+  entered_by: string | null
+  source: 'app' | 'import'
+  created_at: string
+  updated_at: string
 }

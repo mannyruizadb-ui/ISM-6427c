@@ -5,7 +5,9 @@ import { useData, useLookups } from '../state/data'
 import { supabase } from '../lib/supabase'
 import { uploadPhoto } from '../lib/photos'
 import { todayISO, toNum } from '../lib/format'
-import type { WoStatus, WorkOrder } from '../lib/types'
+import type { RepairType, WoStatus, WorkOrder } from '../lib/types'
+import { similarHistory } from '../lib/reliability'
+import { fmtDate } from '../lib/format'
 import { AssetPicker } from '../components/AssetPicker'
 import { PendingPhotos } from '../components/Photos'
 import { EmptyState, Field, PageHead, Segmented, useToast } from '../components/ui'
@@ -29,12 +31,17 @@ export function WorkOrderNew() {
   const [assign, setAssign] = useState<string>(profile?.role === 'mechanic' ? `p:${profile.id}` : '')
   const [pmId, setPmId] = useState<string>(params.get('pm') ?? '')
   const [status, setStatus] = useState<WoStatus>('open')
+  const [repairType, setRepairType] = useState<RepairType>(params.get('pm') ? 'maintenance' : 'emergency')
   const [outOfService, setOutOfService] = useState(false)
   const [openedOn, setOpenedOn] = useState(todayISO())
   const [photos, setPhotos] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
 
   const asset = assetId ? assetById.get(assetId) : undefined
+  const history = useMemo(
+    () => (assetId && problem.trim().length >= 3 ? similarHistory(d.work_orders, assetId, problem) : []),
+    [d.work_orders, assetId, problem],
+  )
   const pms = useMemo(() => d.pm_schedules.filter((s) => s.asset_id === assetId && s.active), [d.pm_schedules, assetId])
   const mechanics = d.profiles.filter((p) => p.active && (p.role === 'mechanic' || p.role === 'admin'))
   const vendors = d.vendors.filter((v) => !v.retired_at)
@@ -69,6 +76,7 @@ export function WorkOrderNew() {
           vendor_id: assign.startsWith('v:') ? assign.slice(2) : null,
           pm_schedule_id: pmId || null,
           status,
+          repair_type: pmId ? 'maintenance' : repairType,
           out_of_service: outOfService,
           source: 'app',
         })
@@ -130,6 +138,33 @@ export function WorkOrderNew() {
               <Field label="Problem" htmlFor="problem">
                 <textarea id="problem" value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="Tap a chip above or type a few words" required />
               </Field>
+              {history.length > 0 && (
+                <div className="banner warn">
+                  <div>This has happened before on {asset.label} ({history.length}×):</div>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontWeight: 400 }}>
+                    {history.slice(0, 3).map((w) => (
+                      <li key={w.id}>
+                        {fmtDate(w.opened_on)}: {w.fix || 'no fix recorded'}
+                        {w.resolution === 'temporary' && ' (temporary fix)'}
+                        {w.resolution === 'not_fixed' && ' (not fixed)'}
+                        {w.notes && <div>📝 {w.notes}</div>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="field">
+                <span className="label">Type</span>
+                <Segmented
+                  label="Repair type"
+                  value={pmId ? 'maintenance' : repairType}
+                  onChange={setRepairType}
+                  options={[
+                    { value: 'emergency', label: 'Emergency / breakdown' },
+                    { value: 'maintenance', label: 'Maintenance' },
+                  ]}
+                />
+              </div>
               {pms.length > 0 && (
                 <Field label="Is this scheduled maintenance?" htmlFor="pm" hint="Closing this work order resets the schedule.">
                   <select id="pm" value={pmId} onChange={(e) => {

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { supabase } from '../lib/supabase'
 import type {
   Asset, AssetFinancials, Part, PartFit, PmSchedule, Profile, Settings, Vendor,
-  WorkOrder, WorkOrderCost, WorkOrderPart,
+  WorkOrder, WorkOrderCost, WorkOrderPart, FuelLog,
 } from '../lib/types'
 import { useAuth } from './auth'
 
@@ -27,6 +27,7 @@ interface Tables {
   profiles: Profile[]
   app_settings: Settings[]
   asset_financials: AssetFinancials[]
+  fuel_logs: FuelLog[]
 }
 type TableName = keyof Tables
 
@@ -42,18 +43,19 @@ const KEYS: Record<TableName, (r: any) => string> = {
   profiles: (r) => r.id,
   app_settings: (r) => String(r.id),
   asset_financials: (r) => r.asset_id,
+  fuel_logs: (r) => r.id,
 }
 
 const EMPTY: Tables = {
   assets: [], vendors: [], parts: [], part_fits: [], pm_schedules: [], work_orders: [],
-  work_order_costs: [], work_order_parts: [], profiles: [], app_settings: [], asset_financials: [],
+  work_order_costs: [], work_order_parts: [], profiles: [], app_settings: [], asset_financials: [], fuel_logs: [],
 }
 
 function tablesFor(role: string | null): TableName[] {
   if (role === 'admin') return Object.keys(EMPTY) as TableName[]
   if (role === 'mechanic')
-    return ['assets', 'vendors', 'parts', 'part_fits', 'pm_schedules', 'work_orders', 'work_order_costs', 'work_order_parts', 'profiles', 'app_settings']
-  if (role === 'driver') return ['assets', 'work_orders', 'profiles']
+    return ['assets', 'vendors', 'parts', 'part_fits', 'pm_schedules', 'work_orders', 'work_order_costs', 'work_order_parts', 'profiles', 'app_settings', 'fuel_logs']
+  if (role === 'driver') return ['assets', 'work_orders', 'profiles', 'fuel_logs']
   return []
 }
 
@@ -64,6 +66,7 @@ const NUMERIC: Partial<Record<TableName, string[]>> = {
   work_order_parts: ['quantity', 'unit_cost'],
   app_settings: ['default_labor_rate'],
   asset_financials: ['purchase_price', 'replacement_cost'],
+  fuel_logs: ['gallons', 'total_cost'],
 }
 
 /** Postgres numeric arrives as a string — normalise to JS numbers. */
@@ -114,18 +117,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setLoading(false)
       return
     }
-    try {
-      const results = await Promise.all(names.map((n) => fetchAll(n)))
-      if (seq !== loadSeq.current) return
-      const next = { ...EMPTY }
-      names.forEach((n, i) => ((next as any)[n] = results[i]))
-      setTables(next)
-      setError(null)
-    } catch (e) {
-      if (seq === loadSeq.current) setError((e as Error).message)
-    } finally {
-      if (seq === loadSeq.current) setLoading(false)
-    }
+    // One table failing (e.g. a migration not run yet) shouldn't blank the whole app.
+    const results = await Promise.allSettled(names.map((n) => fetchAll(n)))
+    if (seq !== loadSeq.current) return
+    const next = { ...EMPTY }
+    const failed: string[] = []
+    names.forEach((n, i) => {
+      const r = results[i]
+      if (r.status === 'fulfilled') (next as any)[n] = r.value
+      else failed.push((r.reason as Error).message)
+    })
+    setTables(next)
+    setError(failed.length ? failed.join('; ') : null)
+    setLoading(false)
   }, [names])
 
   const upsertLocal = useCallback(<T extends TableName>(table: T, row: Tables[T][number]) => {

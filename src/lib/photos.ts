@@ -3,7 +3,7 @@ import { PHOTO_BUCKET, supabase, must } from './supabase'
 const MAX_EDGE = 1600
 
 /** Shrink phone photos (often 4–8 MB) to a ~300 KB JPEG before upload. */
-async function compress(file: File): Promise<Blob> {
+export async function compress(file: File): Promise<Blob> {
   try {
     const bitmap = await createImageBitmap(file)
     const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height))
@@ -49,4 +49,25 @@ export async function signedUrls(paths: string[]): Promise<Record<string, string
   const out: Record<string, string> = {}
   for (const d of data) if (d.signedUrl && d.path) out[d.path] = d.signedUrl
   return out
+}
+
+export const RECEIPT_BUCKET = 'fuel-receipts'
+
+/** Path a receipt will be stored at; saved on the fill-up before the upload. */
+export function receiptPath(fuelLogId: string): string {
+  return `${fuelLogId}/${crypto.randomUUID()}.jpg`
+}
+
+export async function uploadReceipt(path: string, file: File): Promise<void> {
+  const blob = await compress(file)
+  const { error } = await supabase.storage.from(RECEIPT_BUCKET).upload(path, blob, {
+    contentType: blob.type || 'image/jpeg',
+    upsert: false,
+  })
+  if (error) throw new Error(error.message)
+}
+
+export async function receiptUrl(path: string): Promise<string | null> {
+  const { data } = await supabase.storage.from(RECEIPT_BUCKET).createSignedUrl(path, 60 * 60)
+  return data?.signedUrl ?? null
 }

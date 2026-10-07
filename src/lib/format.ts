@@ -52,6 +52,11 @@ export const STATUS_LABEL: Record<string, string> = {
   done: 'Done',
   in_service: 'In service',
   down: 'Down',
+  fixed: 'Fixed',
+  temporary: 'Temporary fix',
+  not_fixed: 'Not fixed',
+  emergency: 'Emergency',
+  maintenance: 'Maintenance',
 }
 
 export const ROLE_LABEL: Record<string, string> = {

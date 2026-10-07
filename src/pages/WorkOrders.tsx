@@ -11,6 +11,7 @@ const FILTERS = [
   { value: 'open', label: 'Open' },
   { value: 'waiting_parts', label: 'Waiting on parts' },
   { value: 'done', label: 'Done' },
+  { value: 'temporary', label: 'Temporary fixes' },
   { value: 'all', label: 'All' },
 ] as const
 
@@ -26,7 +27,9 @@ export function WorkOrders() {
   const list = useMemo(() => {
     const t = q.trim().toLowerCase()
     return d.work_orders
-      .filter((w) => (status === 'all' ? true : status === 'active' ? w.status !== 'done' : w.status === status))
+      .filter((w) =>
+        status === 'all' ? true : status === 'active' ? w.status !== 'done' : status === 'temporary' ? w.resolution === 'temporary' || w.resolution === 'not_fixed' : w.status === status,
+      )
       .filter((w) => {
         if (!t) return true
         const a = assetById.get(w.asset_id)
@@ -117,7 +120,7 @@ export function WorkOrders() {
                     {isStaff && w.status === 'done' && ` · ${fmtMoney(woCost(w, costByWo.get(w.id), partsByWo.get(w.id)).total)}`}
                   </div>
                 </div>
-                <StatusPill status={w.status} />
+                {w.resolution && w.resolution !== 'fixed' ? <StatusPill status={w.resolution} /> : <StatusPill status={w.status} />}
               </Link>
             )
           })}

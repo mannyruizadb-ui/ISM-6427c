@@ -8,7 +8,7 @@ export interface CsvField {
   hint?: string
 }
 
-export type ImportKind = 'assets' | 'parts' | 'repairs'
+export type ImportKind = 'assets' | 'parts' | 'repairs' | 'fuel'
 
 export const FIELDS: Record<ImportKind, CsvField[]> = {
   assets: [
@@ -38,17 +38,32 @@ export const FIELDS: Record<ImportKind, CsvField[]> = {
   repairs: [
     { key: 'asset', label: 'Asset (unit # or name)', required: true, aliases: ['asset', 'unit', 'unit #', 'unit number', 'truck', 'machine', 'equipment'] },
     { key: 'date', label: 'Date', required: true, aliases: ['date', 'repair date', 'date opened', 'opened', 'service date'] },
-    { key: 'problem', label: 'Problem', required: true, aliases: ['problem', 'issue', 'complaint', 'description', 'reason'] },
-    { key: 'fix', label: 'Fix / work done', aliases: ['fix', 'repair', 'work done', 'resolution', 'action', 'work performed'] },
+    { key: 'problem', label: 'Problem', required: true, aliases: ['problem', 'issue', 'complaint', 'description', 'reason', 'issue what was broken', 'what was broken'] },
+    { key: 'fix', label: 'Fix / work done', aliases: ['fix', 'repair', 'work done', 'what was done', 'action', 'work performed'] },
+    { key: 'repair_type', label: 'Repair type', aliases: ['repair type', 'type', 'work type'], hint: 'Emergency / Maintenance (blank = emergency)' },
+    { key: 'resolution', label: 'Problem solved?', aliases: ['problem solved', 'solved', 'fixed', 'resolution', 'outcome'], hint: 'Yes → Fixed; "For now", "I think so", "Somewhat" → Temporary fix; No → Not fixed' },
+    { key: 'part_replaced', label: 'Part replaced', aliases: ['part replaced', 'parts replaced', 'part used', 'parts used'], hint: 'Added to the fix text (doesn’t touch inventory)' },
+    { key: 'part_number', label: 'Part #', aliases: ['part #', 'part number', 'part no'] },
+    { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comments', 'tips'] },
     { key: 'labor_hours', label: 'Labor hours', aliases: ['labor hours', 'hours', 'labor hrs', 'hrs'] },
     { key: 'labor_rate', label: 'Labor rate', aliases: ['labor rate', 'rate', 'hourly rate'] },
     { key: 'parts_cost', label: 'Parts cost', aliases: ['parts cost', 'parts', 'parts $', 'material', 'materials'] },
     { key: 'vendor_cost', label: 'Outside vendor cost', aliases: ['vendor cost', 'outside cost', 'outside vendor', 'shop cost', 'invoice'] },
-    { key: 'downtime_hours', label: 'Downtime hours', aliases: ['downtime', 'downtime hours', 'down hours', 'hours down'] },
+    { key: 'downtime_hours', label: 'Downtime', aliases: ['downtime', 'downtime hours', 'downtime hrs', 'down hours', 'hours down'], hint: '"4 Hours", "30 minutes" become hours; text like "On and off for days" is kept as a note' },
     { key: 'mileage', label: 'Mileage', aliases: ['mileage', 'miles', 'odometer'] },
     { key: 'status', label: 'Status', aliases: ['status'], hint: 'Blank = done' },
     { key: 'reported_by', label: 'Reported by', aliases: ['reported by', 'reporter', 'driver'] },
-    { key: 'mechanic', label: 'Mechanic / vendor', aliases: ['mechanic', 'tech', 'technician', 'assigned', 'assigned to', 'done by', 'vendor'] },
+    { key: 'mechanic', label: 'Mechanic / vendor', aliases: ['mechanic', 'tech', 'technician', 'assigned', 'assigned to', 'done by', 'vendor', 'who repaired it', 'repaired by'] },
+  ],
+  fuel: [
+    { key: 'vehicle', label: 'Truck / vehicle', required: true, aliases: ['truck', 'truck #', 'truck number', 'unit', 'unit #', 'vehicle'], hint: 'Names that aren’t trucks in the app are logged as rentals / other' },
+    { key: 'date', label: 'Date', required: true, aliases: ['date', 'date of fueling', 'fill date', 'fueling date'] },
+    { key: 'odometer', label: 'Odometer at fill-up', aliases: ['odometer', 'odo', 'mileage', 'miles', 'starting odometer reading', 'starting odometer', 'odometer reading'], hint: 'The reading when you filled up (in the old gas tracker: "Starting Odometer Reading")' },
+    { key: 'gallons', label: 'Gallons', required: true, aliases: ['gallons', 'gal', 'total gallons purchased', 'gallons purchased', 'qty'] },
+    { key: 'total_cost', label: 'Total price', required: true, aliases: ['total price', 'price', 'total', 'cost', 'amount', 'total cost'] },
+    { key: 'location', label: 'Station / location', aliases: ['location', 'fueling location', 'station', 'gas station'] },
+    { key: 'full_tank', label: 'Full tank? (Y/N)', aliases: ['full', 'full tank', 'filled'], hint: 'Blank = yes' },
+    { key: 'notes', label: 'Notes', aliases: ['notes', 'note', 'comments'] },
   ],
 }
 
@@ -119,4 +134,50 @@ export function parseDateLoose(v: string): string | null {
   const check = new Date(y, m - 1, d)
   if (check.getFullYear() !== y || check.getMonth() !== m - 1 || check.getDate() !== d) return null
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+/**
+ * Downtime as people actually write it. Hours and minutes become a number;
+ * anything vaguer ("On and off for days", "Half Loads", "2 Days") is kept
+ * word-for-word as a note rather than guessed at.
+ */
+export function parseDowntime(v: string): { hours: number; note: string | null } {
+  const s = v.trim()
+  if (!s || /^(none|n\/a|-|0)$/i.test(s)) return { hours: 0, note: null }
+  const t = s.toLowerCase()
+  let m = t.match(/^(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)?$/)
+  if (m) return { hours: Number(m[1]), note: null }
+  m = t.match(/^(\d+(?:\.\d+)?)\s*(m|min|mins|minute|minutes)$/)
+  if (m) return { hours: Math.round((Number(m[1]) / 60) * 100) / 100, note: null }
+  if (/^(an|one|1) hour$/.test(t)) return { hours: 1, note: null }
+  if (/^half (an )?hour$/.test(t)) return { hours: 0.5, note: null }
+  return { hours: 0, note: `Downtime: ${s}` }
+}
+
+/** "Problem Solved?" answers → outcome. */
+export function parseResolution(v: string): 'fixed' | 'temporary' | 'not_fixed' | null {
+  const t = v.trim().toLowerCase()
+  if (!t || t === 'none' || t === 'n/a') return null
+  if (/^(yes|y|fixed|solved|done)\b/.test(t)) return 'fixed'
+  if (/^(no|n|not)\b/.test(t)) return 'not_fixed'
+  return 'temporary' // "For now", "I think so", "Somewhat", "I believe so", "partially"…
+}
+
+export function parseRepairType(v: string): 'emergency' | 'maintenance' {
+  return /maint|prevent|\bpm\b|service|inspect|clean/i.test(v) ? 'maintenance' : 'emergency'
+}
+
+/** "Truck 11" / "Unit #21" → "11" / "21", for matching against truck unit numbers. */
+export function stripVehiclePrefix(v: string): string | null {
+  const m = v.trim().match(/^(?:truck|unit|van)\s*#?\s*(.+)$/i)
+  return m ? m[1].trim() : null
+}
+
+/** Best guess at what a machine is from its name ("Dryer 3" → dryer). */
+export function guessAsset(name: string): { kind: 'truck' | 'equipment'; unit_number: string | null; name: string | null; equipment_type: string | null } {
+  const unit = stripVehiclePrefix(name)
+  if (unit) return { kind: 'truck', unit_number: unit, name: null, equipment_type: null }
+  const t = name.toLowerCase()
+  const type = ['washer', 'dryer', 'ironer', 'folder'].find((k) => t.includes(k)) ?? 'other'
+  return { kind: 'equipment', unit_number: null, name: name.trim(), equipment_type: type }
 }

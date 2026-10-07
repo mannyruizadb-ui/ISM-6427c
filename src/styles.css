@@ -196,10 +196,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 /* ---------- Pills ---------- */
 .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
 .pill.open { background: var(--info-soft); color: var(--info); }
-.pill.waiting_parts, .pill.due_soon, .pill.warn { background: var(--warn-soft); color: var(--warn); }
-.pill.done, .pill.in_service, .pill.ok { background: var(--ok-soft); color: var(--ok); }
-.pill.down, .pill.overdue, .pill.danger, .pill.never { background: var(--danger-soft); color: var(--danger); }
-.pill.neutral { background: var(--surface-2); color: var(--muted); }
+.pill.waiting_parts, .pill.due_soon, .pill.warn, .pill.temporary { background: var(--warn-soft); color: var(--warn); }
+.pill.done, .pill.in_service, .pill.ok, .pill.fixed, .pill.maintenance { background: var(--ok-soft); color: var(--ok); }
+.pill.down, .pill.overdue, .pill.danger, .pill.never, .pill.not_fixed { background: var(--danger-soft); color: var(--danger); }
+.pill.neutral, .pill.emergency { background: var(--surface-2); color: var(--muted); }
 
 /* ---------- Buttons ---------- */
 .btn {
